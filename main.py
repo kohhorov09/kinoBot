@@ -1,15 +1,16 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.constants import ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-import logging
 import json
 import os
+import logging
 
-BOT_TOKEN = "7838589688:AAGam0Yj0wz1IErdJPj7LIGwPBGY8Z3C9aA"
+BOT_TOKEN = "8011433609:AAGagjhf7Fm5pDaroeInxxBq9saDvzQ24ns"
 ADMIN_ID = 7114973309
-
 DATA_FILE = "data.json"
+MOVIE_FILE = "movies.json"
 
+# Load and Save Functions
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -31,27 +32,24 @@ def save_data():
             "channels": required_channels
         }, f, ensure_ascii=False, indent=2)
 
+def load_movies():
+    if os.path.exists(MOVIE_FILE):
+        with open(MOVIE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_movies():
+    with open(MOVIE_FILE, "w", encoding="utf-8") as f:
+        json.dump(movies, f, ensure_ascii=False, indent=2)
+
 user_db, left_users, ADMINS, required_channels = load_data()
+movies = load_movies()
+used_codes = set(map(int, movies.keys()))
+movie_id_counter = max(used_codes, default=0)
 logging.basicConfig(level=logging.INFO)
 
 def is_subscribed(member):
     return member.status in [ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in user_db:
-        user_db.add(user_id)
-        save_data()
-
-    not_subscribed = [ch for ch in required_channels if not await is_user_subscribed(ch, user_id, context)]
-    if not_subscribed:
-        buttons = [[InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch.lstrip('@')}")] for ch in not_subscribed]
-        buttons.append([InlineKeyboardButton("✅ Tekshirish", callback_data="check_subs")])
-        await update.message.reply_text("‼️ O‘yinni boshlashdan oldin quyidagi kanallarga obuna bo‘ling:", reply_markup=InlineKeyboardMarkup(buttons))
-        return
-
-    game_button = InlineKeyboardButton("🎮 Join Game", web_app=WebAppInfo(url="https://coin-ton-6pu6.vercel.app/"))
-    await update.message.reply_text("✅ Obuna tasdiqlandi. O‘yinni boshlang!", reply_markup=InlineKeyboardMarkup([[game_button]]))
 
 async def is_user_subscribed(channel, user_id, context):
     try:
@@ -60,53 +58,223 @@ async def is_user_subscribed(channel, user_id, context):
     except:
         return False
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    name = update.effective_user.full_name
+
+    if user_id not in user_db:
+        user_db.add(user_id)
+        save_data()
+
+    not_subscribed = [ch for ch in required_channels if not await is_user_subscribed(ch, user_id, context)]
+    if not_subscribed:
+        buttons = [[InlineKeyboardButton(f"📢 {ch}", url=f"https://t.me/{ch.lstrip('@')}")] for ch in not_subscribed]
+        await update.message.reply_text(
+            "‼️ Avval quyidagi kanallarga obuna bo‘ling va /start buyrug‘ini qaytadan yuboring:",
+            reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    await update.message.reply_text(
+        f"👋 Assalomu alaykum {name}!\n\n✍🏻 Iltimos, kino kodini yuboring....")
+
+async def handle_movie_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    # Debug: Kino kodi nima kiritilganini tekshiramiz
+    print("✅ handle_movie_code ishladi")
+
+    # Agar matn raqam bo‘lmasa
+    if not text.isdigit():
+        await update.message.reply_text("❗ Iltimos, faqat kino kodini yuboring.")
+        return
+
+    movie_id = text  # str shaklida qoladi
+    if movie_id in movies:
+        movie = movies[movie_id]
+        try:
+            await context.bot.send_video(
+                    chat_id=update.effective_chat.id,
+                    video=movie["file_id"],
+                    caption=movie.get("caption", "")
+)
+
+        except Exception as e:
+            print(f"❌ Video yuborishda xatolik: {e}")
+            await update.message.reply_text("⚠️ Kino yuborishda muammo yuz berdi.")
+    else:
+        await update.message.reply_text("❌ Bunday  kino topilmadi.")
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "add_movie":
+        context.user_data["awaiting_movie_video"] = True
+        await query.edit_message_text("📥 Iltimos, kino videosini yuboring:")
+
+    elif query.data == "delete_movie":
+        context.user_data["awaiting_delete_code"] = True
+        await query.edit_message_text("🗑 O‘chirmoqchi bo‘lgan kino kodini yuboring:")
+
+SERVER_CHANNEL_ID = -1002725004956  # o'zingizning kanal ID'ingiz
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("awaiting_movie_video"):
+        return
+    print('ishlayabdi')
+    global movie_id_counter
+    while True:
+        movie_id_counter += 1
+        if movie_id_counter not in used_codes:
+            break
+
+    video = update.message.video
+
+    try:
+        # 🔁 Caption hozircha mavjud emas, shunchaki "Kod: ####" bilan vaqtincha yuboriladi
+        temp_caption = f"Kanaldan kinoni o'chrib tashlamang aks holda bot kinoni tashlab bermaydi shuning uchun kanaldan kinoni o'chirmang \n\n kino kodi: {movie_id_counter}"
+
+        sent_msg = await context.bot.send_video(
+            chat_id=SERVER_CHANNEL_ID,
+            video=video.file_id,
+            caption=temp_caption
+        )
+
+        file_id = sent_msg.video.file_id  # serverdan qaytgan yangi file_id
+
+        context.user_data["file_id"] = file_id
+        context.user_data["movie_id"] = movie_id_counter
+        context.user_data["awaiting_movie_video"] = False
+        context.user_data["awaiting_movie_caption"] = True
+
+        await update.message.reply_text("📝 Kino uchun tavsif  yozing:")
+
+    except Exception as e:
+        print(f"❌ Server kanalga yuborishda xatolik: {e}")
+        await update.message.reply_text("⚠️ Kino saqlashda xatolik yuz berdi.")
+
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMINS:
-        await update.message.reply_text("⛔ Bu bo‘lim faqat adminlar uchun.")
+    user = update.effective_user
+    if user.id not in ADMINS:
+        await update.message.reply_text("⛔ Siz admin emassiz.")
         return
 
     keyboard = ReplyKeyboardMarkup([
+        ["🎬 Kino sozlamalari"],
         ["📊 Statistika", "📋 Ro‘yxat"],
         ["➕ Obuna qo‘shish", "➖ Obunani o‘chirish"],
         ["📤 Xabar yuborish", "👤 Admin qo‘shish"],
         ["🗂 Adminlar", "⬅️ Ortga"]
     ], resize_keyboard=True)
-    await update.message.reply_text("Admin menyusi:", reply_markup=keyboard)
 
-async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📋 Admin menyusi:", reply_markup=keyboard)
+def is_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return (
+        update.effective_user.id in ADMINS and
+        context.user_data.get("awaiting_broadcast", False)
+    )
+async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🔐 Faqat adminlarga ruxsat
     user_id = update.effective_user.id
-    text = update.message.text.strip()
-
     if user_id not in ADMINS:
         return
 
-    if context.user_data.get("awaiting_broadcast"):
-        success, failed = 0, 0
-        success_list = []
-        failed_list = []
-
-        for uid in user_db:
-            try:
-                user = await context.bot.get_chat(uid)
-                name = f"@{user.username}" if user.username else f"🆔 {uid}"
-                await context.bot.send_message(uid, text)
-                success += 1
-                success_list.append(name)
-            except:
-                failed += 1
-                failed_list.append(f"🆔 {uid}")
-
-        context.user_data["awaiting_broadcast"] = False
-
-        result_text = (
-            f"✅ <b>Yuborilgan:</b> {success} ta\n"
-            f"{chr(10).join(success_list) if success_list else '🚫 Hech kimga yuborilmadi'}\n\n"
-            f"❌ <b>Xatolik:</b> {failed} ta\n"
-            f"{chr(10).join(failed_list) if failed_list else '✅ Hamma xabar yuborildi'}"
-        )
-
-        await update.message.reply_text(result_text, parse_mode="HTML")
+    # Faqat "xabar yuborish" rejimida ishlaydi
+    if not context.user_data.get("awaiting_broadcast"):
         return
+
+    success, failed = 0, 0
+
+    for uid in user_db:
+        try:
+            # TEXT
+            if update.message.text:
+                await context.bot.send_message(chat_id=uid, text=update.message.text)
+
+            # PHOTO
+            elif update.message.photo:
+                await context.bot.send_photo(chat_id=uid, photo=update.message.photo[-1].file_id, caption=update.message.caption or "")
+
+            # VIDEO
+            elif update.message.video:
+                await context.bot.send_video(chat_id=uid, video=update.message.video.file_id, caption=update.message.caption or "")
+
+            # AUDIO
+            elif update.message.audio:
+                await context.bot.send_audio(chat_id=uid, audio=update.message.audio.file_id, caption=update.message.caption or "")
+
+            # VOICE
+            elif update.message.voice:
+                await context.bot.send_voice(chat_id=uid, voice=update.message.voice.file_id, caption=update.message.caption or "")
+
+            # VIDEO_NOTE (tumaloq video)
+            elif update.message.video_note:
+                await context.bot.send_video_note(chat_id=uid, video_note=update.message.video_note.file_id)
+
+            # STICKER
+            elif update.message.sticker:
+                await context.bot.send_sticker(chat_id=uid, sticker=update.message.sticker.file_id)
+
+            # ANIMATION (GIF)
+            elif update.message.animation:
+                await context.bot.send_animation(chat_id=uid, animation=update.message.animation.file_id, caption=update.message.caption or "")
+
+            # FORWARDED MESSAGE
+            elif update.message.forward_from or update.message.forward_from_chat:
+                await context.bot.forward_message(chat_id=uid, from_chat_id=update.message.chat_id, message_id=update.message.message_id)
+
+            else:
+                failed += 1
+                continue
+
+            success += 1
+
+        except Exception as e:
+            print(f"❌ {uid} foydalanuvchiga xabar yuborilmadi: {e}")
+            failed += 1
+
+    # Xabar rejimini o‘chirib qo‘yamiz
+    context.user_data["awaiting_broadcast"] = False
+
+    await update.message.reply_text(
+        f"✅ Yuborildi: {success} ta\n❌ Xato: {failed} ta"
+    )
+
+
+async def admin_textt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Agar broadcast holatida bo‘lsa — hech narsa qilmaymiz, broadcast_handler o‘zi olib ketadi
+
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    if context.user_data.get("awaiting_broadcast"):
+        return
+
+    # 🔁 Har bir foydalanuvchi (hatto admin ham) kod yuborsa — kinoni ko‘rish funksiyasiga uzatamiz
+
+
+# Faqat hech qanday rejim yo‘q bo‘lsa — kinoni chiqarish funksiyasiga uzatamiz
+    if (
+        text.isdigit() and
+    not any([
+        context.user_data.get("awaiting_delete_code"),
+        context.user_data.get("awaiting_movie_caption"),
+        context.user_data.get("awaiting_broadcast"),
+        context.user_data.get("adding_channel"),
+        context.user_data.get("adding_admin"),
+        context.user_data.get("awaiting_movie_video")
+    ])
+):
+        return await handle_movie_code(update, context)
+
+
+    # 🔒 Quyidagisi faqat adminlar uchun
+    if user_id not in ADMINS:
+        return
+
+
+    # 🔒 Quyidagisi faqat adminlar uchun
 
     if context.user_data.get("adding_channel"):
         if text.startswith("@"):
@@ -129,6 +297,31 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["adding_admin"] = False
         return
 
+    if context.user_data.get("awaiting_delete_code"):
+        code = text.strip()
+        if code in movies:
+            del movies[code]
+            save_movies()
+            await update.message.reply_text(f"🗑 Kino o‘chirildi. \n\n kino kodi {code}")
+        else:
+            await update.message.reply_text("❌ Bunday kod topilmadi.")
+        context.user_data["awaiting_delete_code"] = False
+        return
+
+    if context.user_data.get("awaiting_movie_caption"):
+        caption = text
+        movie_id = context.user_data["movie_id"]
+        file_id = context.user_data["file_id"]
+
+        movies[str(movie_id)] = {"file_id": file_id, "caption": caption}
+        save_movies()
+        used_codes.add(movie_id)
+
+        await update.message.reply_text(f"✅ Kino saqlandi!\n🎬 Kino kodi: <b>{movie_id}</b>", parse_mode="HTML")
+        context.user_data["awaiting_movie_caption"] = False
+        return
+
+    # 🔄 Admin matn tugmalari (Statistika, Obuna qo‘shish va h.k.)
     if text == "📋 Ro‘yxat":
         if required_channels:
             ch_list = "\n".join([f"{i+1}. {ch}" for i, ch in enumerate(required_channels)])
@@ -160,8 +353,9 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "📤 Xabar yuborish":
         context.user_data["awaiting_broadcast"] = True
-        await update.message.reply_text("✉️ Yuboriladigan xabar matnini kiriting:")
+        await update.message.reply_text("✉️ Foydalanuvchilarga yuboriladigan xabarni  kriting:")
         return
+
 
     if text == "👤 Admin qo‘shish":
         if user_id != ADMIN_ID:
@@ -181,34 +375,58 @@ async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("👥 Adminlar ro‘yxati:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
+    if text == "🎬 Kino sozlamalari":
+        buttons = [
+            [InlineKeyboardButton("➕ Kino qo‘shish", callback_data="add_movie")],
+            [InlineKeyboardButton("🗑 Kino o‘chirish", callback_data="delete_movie")],
+            [InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_admin")]
+        ]
+        await update.message.reply_text("🎬 Kino sozlamalari:", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+   
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if query.data == "add_movie":
+        context.user_data["awaiting_movie_video"] = True
+        await query.edit_message_text("📥 Iltimos, kino videosini yuboring:")
+        return
+
+    elif query.data == "delete_movie":
+        context.user_data["awaiting_delete_code"] = True
+        await query.edit_message_text("❌ O‘chirmoqchi bo‘lgan kino kodini yuboring:")
+        return
+
     if query.data == "back_to_admin":
         user = query.from_user
         message = query.message
         if user.id not in ADMINS:
             await message.edit_text("⛔ Siz admin emassiz.")
             return
-        keyboard = ReplyKeyboardMarkup([
-            ["📊 Statistika", "📋 Ro‘yxat"],
-            ["➕ Obuna qo‘shish", "➖ Obunani o‘chirish"],
-            ["📤 Xabar yuborish", "👤 Admin qo‘shish"],
-            ["🗂 Adminlar", "⬅️ Ortga"]
-        ], resize_keyboard=True)
-        await context.bot.send_message(chat_id=user.id, text="📋 Admin menyusi:", reply_markup=keyboard)
         await message.delete()
         return
 
     elif query.data.startswith("remove_admin_"):
         aid = int(query.data.split("_")[2])
+
+        # 🔒 Faqat asosiy admin boshqa adminlarni o‘chira oladi
+        if query.from_user.id != ADMIN_ID:
+            await query.answer("⛔ Sizda boshqa adminlarni o‘chirish huquqi yo‘q!", show_alert=True)
+            return
+
+        # 🔐 Asosiy adminni o‘chirib bo‘lmaydi
         if aid == ADMIN_ID:
             await query.answer("⛔ Asosiy adminni o‘chira olmaysiz!", show_alert=True)
             return
+
         if aid in ADMINS:
             ADMINS.remove(aid)
             save_data()
-            await query.edit_message_text(f"🗑 Admin o‘chirildi:\n🆔 <code>{aid}</code>", parse_mode="HTML")
+            await query.edit_message_text(
+                f"🗑 Admin o‘chirildi:\n🆔 <code>{aid}</code>",
+                parse_mode="HTML"
+            )
         else:
             await query.edit_message_text("❌ Admin topilmadi.")
 
@@ -303,13 +521,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons = [[InlineKeyboardButton(f"👤 {aid}", callback_data=f"admin_{aid}")] for aid in ADMINS]
         buttons.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="back_to_admin")])
         await query.edit_message_text("👥 Adminlar ro‘yxati:", reply_markup=InlineKeyboardMarkup(buttons))
-
 if __name__ == "__main__":
     import asyncio
+
+    # Bot yaratish
     app = Application.builder().token(BOT_TOKEN).build()
+
+    # 🟢 Boshlanish buyrug'i
     app.add_handler(CommandHandler("start", start))
+
+    # 🔒 Admin menyusi
     app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_text))
+
+    # 🧠 Kino kodi, admin komandalarini aniqlovchi handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_textt))
+
+# 🎥 Kino video faylini qabul qiluvchi handler (kino qo‘shish jarayoni uchun)
+    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
+
+# 🔊 Broadcast rejimida har qanday kontentni qabul qiluvchi handler
+    app.add_handler(MessageHandler(filters.ALL, broadcast_handler))
+
+    # 📲 Inline tugmalar va callback’larni qabul qiluvchi handler
     app.add_handler(CallbackQueryHandler(handle_callback))
+
+    # ✅ Ishga tushirish
     print("✅ Bot ishga tushdi")
     asyncio.run(app.run_polling())
