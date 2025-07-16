@@ -1,2 +1,2 @@
-"# Newbot" 
-"# Newbot" 
+"# Newbot"
+"# kinoBot" 
